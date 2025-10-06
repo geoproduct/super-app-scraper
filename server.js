@@ -11,54 +11,52 @@ app.get('/', (req, res) => {
 
 app.post('/api/scrape/jobs', async (req, res) => {
   const { query } = req.body;
+  const apiKey = process.env.SCRAPINGBEE_API_KEY;
+  
+  if (!apiKey) {
+    return res.json({ jobs: [], error: 'API key not configured' });
+  }
   
   try {
-    const url = `https://www.saramin.co.kr/zf_user/search?searchword=${encodeURIComponent(query)}`;
+    const targetUrl = `https://www.saramin.co.kr/zf_user/search?searchword=${encodeURIComponent(query)}`;
+    const scrapingbeeUrl = `https://app.scrapingbee.com/api/v1/?api_key=${apiKey}&url=${encodeURIComponent(targetUrl)}&render_js=true`;
     
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'
-      }
-    });
+    const response = await fetch(scrapingbeeUrl);
     
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+      throw new Error(`ScrapingBee error: ${response.status}`);
     }
     
     const html = await response.text();
     
-    // HTML에서 채용공고 추출
+    // HTML 파싱
     const jobs = [];
-    const recruitPattern = /<div[^>]*class="[^"]*item_recruit[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/gi;
-    const titlePattern = /<a[^>]*class="[^"]*str_tit[^"]*"[^>]*title="([^"]+)"/i;
-    const companyPattern = /<a[^>]*class="[^"]*str_company[^"]*"[^>]*>([^<]+)</i;
-    const linkPattern = /<a[^>]*class="[^"]*str_tit[^"]*"[^>]*href="([^"]+)"/i;
+    const titlePattern = /<a[^>]*class="[^"]*str_tit[^"]*"[^>]*title="([^"]+)"/gi;
+    const companyPattern = /<a[^>]*class="[^"]*str_company[^"]*"[^>]*>([^<]+)</gi;
+    
+    const titles = [];
+    const companies = [];
     
     let match;
-    let count = 0;
-    
-    while ((match = recruitPattern.exec(html)) !== null && count < 20) {
-      const itemHtml = match[1];
-      
-      const titleMatch = titlePattern.exec(itemHtml);
-      const companyMatch = companyPattern.exec(itemHtml);
-      const linkMatch = linkPattern.exec(itemHtml);
-      
-      if (titleMatch && companyMatch) {
-        jobs.push({
-          title: titleMatch[1].trim(),
-          company: companyMatch[1].trim(),
-          location: '서울',
-          salary: '회사 내규에 따름',
-          link: linkMatch ? `https://www.saramin.co.kr${linkMatch[1]}` : url
-        });
-        count++;
-      }
+    while ((match = titlePattern.exec(html)) !== null) {
+      titles.push(match[1].trim());
     }
     
-    console.log(`Found ${jobs.length} jobs for query: ${query}`);
+    while ((match = companyPattern.exec(html)) !== null) {
+      companies.push(match[1].trim());
+    }
+    
+    for (let i = 0; i < Math.min(titles.length, companies.length, 20); i++) {
+      jobs.push({
+        title: titles[i],
+        company: companies[i],
+        location: '서울',
+        salary: '회사 내규',
+        link: targetUrl
+      });
+    }
+    
+    console.log(`ScrapingBee: Found ${jobs.length} jobs for query: ${query}`);
     res.json({ jobs, count: jobs.length });
     
   } catch (error) {
