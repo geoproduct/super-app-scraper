@@ -1,6 +1,7 @@
 {
   "name": "super-app-scraper",
   "version": "1.0.0",
+  "type": "commonjs",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -10,5 +11,8 @@
     "cors": "^2.8.5",
     "axios": "^1.6.0",
     "cheerio": "^1.0.0-rc.12"
+  },
+  "engines": {
+    "node": "18.x"
   }
 }
