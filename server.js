@@ -375,4 +375,21 @@ app.post('/api/scrape/real-estate', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server on ${PORT}`));
+
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`📍 Time: ${new Date().toISOString()}`);
+});
+
+server.on('error', (err) => {
+  console.error('❌ Server error:', err);
+});
+
+// 종료 처리
+process.on('SIGTERM', () => {
+  console.log('⚠️ SIGTERM received, closing server...');
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});
