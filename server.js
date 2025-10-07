@@ -10,15 +10,13 @@ app.get('/', (req, res) => {
   res.json({ status: 'OK' });
 });
 
-// 사람인 + 잡코리아 동시 크롤링
 app.post('/api/scrape/jobs', async (req, res) => {
   const { 
     query, 
-    location = '', 
-    experience = '', 
-    education = '', 
-    salary = '',
-    maxPages = 5  // 최대 5페이지 (100개 공고)
+    regions = [],
+    maxExperience = '',
+    maxEducation = '',
+    maxPages = 5
   } = req.body;
   
   let browser;
@@ -31,30 +29,29 @@ app.post('/api/scrape/jobs', async (req, res) => {
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
     });
     
-    // 1. 사람인 크롤링
-    console.log('🔍 Scraping Saramin...');
+    console.log('🔍 Starting scrape...');
+    console.log('Filters:', { query, regions, maxExperience, maxEducation });
+    
+    // 사람인 크롤링
     for (let page = 1; page <= maxPages; page++) {
       try {
-        const saraminJobs = await scrapeSaramin(browser, query, page);
-        allJobs.push(...saraminJobs);
-        console.log(`Saramin page ${page}: ${saraminJobs.length} jobs`);
-        
-        if (saraminJobs.length === 0) break;
+        const jobs = await scrapeSaramin(browser, query, page);
+        allJobs.push(...jobs);
+        console.log(`Saramin page ${page}: ${jobs.length} jobs`);
+        if (jobs.length === 0) break;
       } catch (err) {
         console.error(`Saramin page ${page} error:`, err.message);
         break;
       }
     }
     
-    // 2. 잡코리아 크롤링
-    console.log('🔍 Scraping JobKorea...');
+    // 잡코리아 크롤링
     for (let page = 1; page <= maxPages; page++) {
       try {
-        const jobkoreaJobs = await scrapeJobKorea(browser, query, page);
-        allJobs.push(...jobkoreaJobs);
-        console.log(`JobKorea page ${page}: ${jobkoreaJobs.length} jobs`);
-        
-        if (jobkoreaJobs.length === 0) break;
+        const jobs = await scrapeJobKorea(browser, query, page);
+        allJobs.push(...jobs);
+        console.log(`JobKorea page ${page}: ${jobs.length} jobs`);
+        if (jobs.length === 0) break;
       } catch (err) {
         console.error(`JobKorea page ${page} error:`, err.message);
         break;
@@ -63,42 +60,66 @@ app.post('/api/scrape/jobs', async (req, res) => {
     
     await browser.close();
     
-    // 3. 필터링 적용
-    let filteredJobs = allJobs;
+    // 스마트 필터링
+    let filtered = allJobs;
     
-    if (location) {
-      filteredJobs = filteredJobs.filter(job => 
-        job.location.includes(location)
+    // 지역 필터 (여러 지역 OR 조건)
+    if (regions.length > 0) {
+      filtered = filtered.filter(job => 
+        regions.some(region => job.location.includes(region))
       );
     }
     
-    if (experience) {
-      filteredJobs = filteredJobs.filter(job => 
-        job.experience && job.experience.includes(experience)
-      );
+    // 경력 필터 (내 경력 이하만)
+    if (maxExperience) {
+      const maxExp = parseInt(maxExperience);
+      filtered = filtered.filter(job => {
+        if (!job.experience) return true; // 경력 정보 없으면 포함
+        
+        const exp = job.experience.toLowerCase();
+        
+        // "신입" 또는 "경력무관" 포함
+        if (exp.includes('신입') || exp.includes('무관')) return true;
+        
+        // 숫자 추출
+        const match = exp.match(/(\d+)/);
+        if (match) {
+          const requiredExp = parseInt(match[1]);
+          return requiredExp <= maxExp;
+        }
+        
+        return true;
+      });
     }
     
-    if (education) {
-      filteredJobs = filteredJobs.filter(job => 
-        job.education && job.education.includes(education)
-      );
+    // 학력 필터 (내 학력 이하만)
+    if (maxEducation) {
+      const eduLevels = ['학력무관', '고졸', '초대졸', '대졸', '석사', '박사'];
+      const maxEduIndex = parseInt(maxEducation);
+      const allowedEdu = eduLevels.slice(0, maxEduIndex + 1);
+      
+      filtered = filtered.filter(job => {
+        if (!job.education) return true;
+        
+        // 허용된 학력 중 하나라도 포함되면 OK
+        return allowedEdu.some(edu => job.education.includes(edu));
+      });
     }
     
-    console.log(`✅ Total: ${allJobs.length} jobs, Filtered: ${filteredJobs.length} jobs`);
+    console.log(`✅ Total: ${allJobs.length}, Filtered: ${filtered.length}`);
     res.json({ 
-      jobs: filteredJobs,
+      jobs: filtered,
       total: allJobs.length,
-      filtered: filteredJobs.length
+      filtered: filtered.length
     });
     
   } catch (error) {
     if (browser) await browser.close();
     console.error('❌ Error:', error.message);
-    res.json({ jobs: [], error: error.message });
+    res.json({ jobs: [], total: 0, filtered: 0, error: error.message });
   }
 });
 
-// 사람인 크롤링 함수
 async function scrapeSaramin(browser, query, pageNum) {
   const page = await browser.newPage();
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
@@ -128,7 +149,6 @@ async function scrapeSaramin(browser, query, pageNum) {
   return jobs.filter(job => job.title && job.company);
 }
 
-// 잡코리아 크롤링 함수
 async function scrapeJobKorea(browser, query, pageNum) {
   const page = await browser.newPage();
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
