@@ -22,15 +22,27 @@ app.post('/api/scrape/jobs', async (req, res) => {
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--disable-gpu'
+        '--disable-gpu',
+        '--disable-features=IsolateOrigins,site-per-process'
       ]
     });
     
     const page = await browser.newPage();
-    await page.goto(`https://www.saramin.co.kr/zf_user/search?searchword=${encodeURIComponent(query)}`, {
-      waitUntil: 'networkidle0',
-      timeout: 30000
-    });
+    
+    // User-Agent 설정
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+    
+    // 타임아웃 60초로 증가, waitUntil 조건 완화
+    await page.goto(
+      `https://www.saramin.co.kr/zf_user/search?searchword=${encodeURIComponent(query)}`,
+      { 
+        waitUntil: 'domcontentloaded',  // networkidle0 대신 사용
+        timeout: 60000 
+      }
+    );
+    
+    // 페이지 로딩 추가 대기
+    await page.waitForSelector('.item_recruit', { timeout: 10000 }).catch(() => {});
     
     const jobs = await page.evaluate(() => {
       const results = [];
@@ -49,12 +61,12 @@ app.post('/api/scrape/jobs', async (req, res) => {
     });
     
     await browser.close();
-    console.log(`Found ${jobs.length} jobs for: ${query}`);
-    res.json({ jobs });
+    console.log(`✅ Found ${jobs.length} jobs for: ${query}`);
+    res.json({ jobs, count: jobs.length });
     
   } catch (error) {
     if (browser) await browser.close();
-    console.error('Error:', error.message);
+    console.error('❌ Error:', error.message);
     res.json({ jobs: [], error: error.message });
   }
 });
@@ -64,4 +76,4 @@ app.post('/api/scrape/real-estate', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server on ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server on ${PORT}`));
