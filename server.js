@@ -90,6 +90,13 @@ app.post('/api/scrape/jobs', async (req, res) => {
     
     // 필터링
     let filtered = allJobs;
+    // 검색어 관련성 필터링 (중요!)
+    const queryKeywords = query.toLowerCase().split(' ').filter(k => k.length > 2);
+    filtered = filtered.filter(job => {
+      const searchText = (job.title + ' ' + job.company).toLowerCase();
+      // 검색어 키워드 중 하나라도 포함되어야 함
+      return queryKeywords.some(keyword => searchText.includes(keyword));
+    });
     
     if (regions.length > 0) {
       filtered = filtered.filter(j => regions.some(r => j.location.includes(r)));
@@ -258,30 +265,58 @@ async function scrapeIncruit(browser, query, maxPages) {
       const p = await browser.newPage();
       await p.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
       
-      const url = `https://job.incruit.com/jobdb_list/searchjob.asp?ct=1&ty=1&cd=149&kw=${encodeURIComponent(query)}&page=${page}`;
-      await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await p.waitForTimeout(3000);
+      // 여러 URL 시도
+      const urls = [
+        `https://job.incruit.com/jobdb_list/searchjob.asp?ct=1&kw=${encodeURIComponent(query)}&page=${page}`,
+        `https://www.incruit.com/search/list.asp?col=job&kw=${encodeURIComponent(query)}&page=${page}`,
+        `https://job.incruit.com/jobdb_list/list.asp?kw=${encodeURIComponent(query)}&startno=${(page - 1) * 30}`
+      ];
       
-      const pageJobs = await p.evaluate(() => {
-        const results = [];
-        document.querySelectorAll('.cl_top, .n_job_list_default, table tr').forEach(el => {
-          const titleEl = el.querySelector('a[href*="recruit"]');
-          if (titleEl && titleEl.textContent && titleEl.textContent.trim().length > 5) {
-            const companyEl = el.querySelector('[class*="company"], td a');
-            results.push({
-              title: titleEl.textContent.trim(),
-              company: companyEl?.textContent.trim() || '회사명없음',
-              location: el.querySelector('[class*="area"], td')?.textContent.trim() || '',
-              experience: '경력무관',
-              education: '학력무관',
-              link: titleEl.href.includes('http') ? titleEl.href : `https://job.incruit.com${titleEl.getAttribute('href')}`,
-              source: 'Incruit'
+      let pageJobs = [];
+      
+      for (const url of urls) {
+        try {
+          console.log(`Incruit trying: ${url}`);
+          await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+          await p.waitForTimeout(3000);
+          
+          pageJobs = await p.evaluate(() => {
+            const results = [];
+            
+            // 모든 가능한 셀렉터 시도
+            const allLinks = document.querySelectorAll('a');
+            
+            allLinks.forEach(link => {
+              const href = link.getAttribute('href');
+              const text = link.textContent?.trim() || '';
+              
+              // recruit 관련 링크만
+              if (href && href.includes('recruit') && text.length > 10) {
+                const parent = link.closest('tr, li, div.cl_top, div.cell_mid');
+                const companyEl = parent?.querySelector('a[href*="company"], td:nth-child(2) a');
+                
+                results.push({
+                  title: text.substring(0, 100),
+                  company: companyEl?.textContent?.trim() || '회사명없음',
+                  location: parent?.querySelector('td:nth-child(3), span')?.textContent?.trim() || '',
+                  experience: '경력무관',
+                  education: '학력무관',
+                  link: href.includes('http') ? href : `https://job.incruit.com${href}`,
+                  source: 'Incruit'
+                });
+              }
             });
-          }
-        });
-        return results;
-      });
-      
+            
+            return results.filter((j, i, arr) => arr.findIndex(x => x.link === j.link) === i).slice(0, 30);
+          });
+          
+          console.log(`Incruit URL result: ${pageJobs.length}`);
+          if (pageJobs.length > 0) break;
+          
+        } catch (urlErr) {
+          console.error(`Incruit URL error:`, urlErr.message);
+        }
+      }
       await p.close();
       jobs.push(...pageJobs);
       
