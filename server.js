@@ -40,29 +40,37 @@ app.post('/api/scrape/jobs', async (req, res) => {
         break;
       }
     }
-    
-    // 2. 잡코리아
+    // 2. 잡코리아 (재시도 포함)
     console.log('📍 JobKorea...');
-    try {
-      const jobs = await scrapeJobKorea(browser, query, Math.min(maxPages, 3));
-      allJobs.push(...jobs);
-      stats.jobkorea = jobs.length;
-      console.log(`  Total: ${jobs.length}`);
-    } catch (e) {
-      console.error(`JobKorea:`, e.message);
+    for (let retry = 0; retry < 2; retry++) {
+      try {
+        await new Promise(resolve => setTimeout(resolve, 2000)); // 2초 대기
+        const jobs = await scrapeJobKorea(browser, query, Math.min(maxPages, 3));
+        allJobs.push(...jobs);
+        stats.jobkorea = jobs.length;
+        console.log(`  Total: ${jobs.length}`);
+        if (jobs.length > 0) break;
+      } catch (e) {
+        console.error(`JobKorea attempt ${retry + 1}:`, e.message);
+        if (retry === 1) console.error(`JobKorea failed after 2 attempts`);
+      }
     }
-    
-    // 3. 인크루트
+
+    // 3. 인크루트 (재시도 포함)
     console.log('📍 Incruit...');
-    try {
-      const jobs = await scrapeIncruit(browser, query, 3);
-      allJobs.push(...jobs);
-      stats.incruit = jobs.length;
-      console.log(`  Total: ${jobs.length}`);
-    } catch (e) {
-      console.error(`Incruit:`, e.message);
+    for (let retry = 0; retry < 2; retry++) {
+      try {
+        await new Promise(resolve => setTimeout(resolve, 2000)); // 2초 대기
+        const jobs = await scrapeIncruit(browser, query, 3);
+        allJobs.push(...jobs);
+        stats.incruit = jobs.length;
+        console.log(`  Total: ${jobs.length}`);
+        if (jobs.length > 0) break;
+      } catch (e) {
+        console.error(`Incruit attempt ${retry + 1}:`, e.message);
+        if (retry === 1) console.error(`Incruit failed after 2 attempts`);
+      }
     }
-    
     // 4. 원티드
     console.log('📍 Wanted...');
     try {
