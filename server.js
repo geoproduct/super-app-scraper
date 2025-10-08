@@ -42,15 +42,15 @@ app.post('/api/scrape/jobs', async (req, res) => {
     }
     
     // 2. 잡코리아 (API 방식)
-    console.log('📍 JobKorea API...');
-    try {
-      const jobs = await scrapeJobKoreaAPI(query, maxPages);
-      allJobs.push(...jobs);
-      stats.jobkorea = jobs.length;
-      console.log(`  Total: ${jobs.length}`);
-    } catch (e) {
-      console.error(`JobKorea:`, e.message);
-    }
+    console.log('📍 JobKorea...');
+  try {
+    const jobs = await scrapeJobKorea(browser, query, Math.min(maxPages, 3));
+    allJobs.push(...jobs);
+    stats.jobkorea = jobs.length;
+    console.log(`  Total: ${jobs.length}`);
+  } catch (e) {
+    console.error(`JobKorea:`, e.message);
+  }
     
     // 3. 인크루트
     console.log('📍 Incruit...');
@@ -137,48 +137,27 @@ async function scrapeSaramin(browser, query, page) {
   return jobs;
 }
 
-// 잡코리아 API (fetch 사용)
-async function scrapeJobKoreaAPI(query, maxPages) {
+// 잡코리아 (개선된 Puppeteer)
+async function scrapeJobKorea(browser, query, maxPages) {
   const jobs = [];
   
-  for (let page = 1; page <= Math.min(maxPages, 5); page++) {
+  for (let page = 1; page <= maxPages; page++) {
     try {
-      const url = `https://www.jobkorea.co.kr/Search/Api/Search?pageindex=${page}&stext=${encodeURIComponent(query)}&sort=score`;
+      const p = await browser.newPage();
       
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Referer': 'https://www.jobkorea.co.kr/',
-          'Accept': 'application/json'
-        }
+      // 더 실제 브라우저처럼 설정
+      await p.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+      await p.setViewport({ width: 1920, height: 1080 });
+      
+      // 쿠키/로컬스토리지 설정
+      await p.evaluateOnNewDocument(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => false });
       });
       
-      const data = await response.json();
+      const url = `https://www.jobkorea.co.kr/Search/?stext=${encodeURIComponent(query)}&Page_No=${page}`;
       
-      if (data && data.list && Array.isArray(data.list)) {
-        data.list.forEach(item => {
-          jobs.push({
-            title: item.title || '',
-            company: item.companyNm || '',
-            location: item.region || '',
-            experience: item.career || '경력무관',
-            education: item.education || '학력무관',
-            link: `https://www.jobkorea.co.kr/Recruit/GI_Read/${item.id}`,
-            source: 'JobKorea'
-          });
-        });
-      }
-      
-      if (!data || !data.list || data.list.length === 0) break;
-      
-    } catch (err) {
-      console.error(`JobKorea API page ${page}:`, err.message);
-      break;
-    }
-  }
-  
-  return jobs.filter(j => j.title && j.company);
-}
+      await p.goto(url, { 
+        waitUntil:
 
 // 인크루트 (수정된 URL)
 async function scrapeIncruit(browser, query, maxPages) {
