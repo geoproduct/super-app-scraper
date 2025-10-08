@@ -91,13 +91,21 @@ app.post('/api/scrape/jobs', async (req, res) => {
     // 필터링
     let filtered = allJobs;
     // 검색어 관련성 필터링 (중요!)
-    const queryKeywords = query.toLowerCase().split(' ').filter(k => k.length > 2);
+    const queryKeywords = query.toLowerCase()
+      .replace(/[^a-z0-9가-힣\s]/g, ' ') // 특수문자 제거
+      .split(/\s+/)
+      .filter(k => k.length > 2);
+    
     filtered = filtered.filter(job => {
       const searchText = (job.title + ' ' + job.company).toLowerCase();
       // 검색어 키워드 중 하나라도 포함되어야 함
-      return queryKeywords.some(keyword => searchText.includes(keyword));
-    });
-    
+
+      // 제목 길이 체크 (너무 긴 것 제외 - 블로그 글 필터링)
+      const validTitleLength = job.title.length <= 150;
+      // URL이 제목에 포함되어 있으면 제외
+      const noUrlInTitle = !job.title.includes('http');
+      return hasKeyword && validTitleLength && noUrlInTitle;
+    });    
     if (regions.length > 0) {
       filtered = filtered.filter(j => regions.some(r => j.location.includes(r)));
     }
@@ -256,7 +264,7 @@ async function scrapeJobKorea(browser, query, maxPages) {
   return jobs.filter((j, i, arr) => arr.findIndex(x => x.link === j.link) === i).slice(0, 100);
 }
 
-// 인크루트
+// 인크루트 (JavaScript 코드 기반 완전 재작성)
 async function scrapeIncruit(browser, query, maxPages) {
   const jobs = [];
   
@@ -264,59 +272,76 @@ async function scrapeIncruit(browser, query, maxPages) {
     try {
       const p = await browser.newPage();
       await p.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+      await p.setViewport({ width: 1920, height: 1080 });
       
-      // 여러 URL 시도
-      const urls = [
-        `https://job.incruit.com/jobdb_list/searchjob.asp?ct=1&kw=${encodeURIComponent(query)}&page=${page}`,
-        `https://www.incruit.com/search/list.asp?col=job&kw=${encodeURIComponent(query)}&page=${page}`,
-        `https://job.incruit.com/jobdb_list/list.asp?kw=${encodeURIComponent(query)}&startno=${(page - 1) * 30}`
-      ];
+      // JavaScript 코드와 동일한 URL
+      const url = `http://job.incruit.com/entry/searchjob.asp?ct=12&ty=1&cd=1&kw=${encodeURIComponent(query)}&articlecount=60&page=${page}`;
       
-      let pageJobs = [];
+      console.log(`Incruit URL: ${url}`);
+      await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await p.waitForTimeout(5000);
       
-      for (const url of urls) {
-        try {
-          console.log(`Incruit trying: ${url}`);
-          await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-          await p.waitForTimeout(3000);
-          
-          pageJobs = await p.evaluate(() => {
-            const results = [];
+      // JavaScript 코드와 동일한 셀렉터
+      const pageJobs = await p.evaluate(() => {
+        const results = [];
+        
+        // JavaScript 코드: #content > div:not(.entry-new2017) > div.n_job_list_table_a.list_full_default> table > tbody > tr
+        const rows = document.querySelectorAll('#content > div:not(.entry-new2017) > div.n_job_list_table_a.list_full_default > table > tbody > tr');
+        
+        console.log(`Found ${rows.length} rows`);
+        
+        rows.forEach(tr => {
+          try {
+            // 회사명: th > div > div.check_list_r > span > a
+            const companyEl = tr.querySelector('th > div > div.check_list_r > span > a');
+            const company = companyEl?.getAttribute('title') || companyEl?.textContent?.trim() || '';
             
-            // 모든 가능한 셀렉터 시도
-            const allLinks = document.querySelectorAll('a');
+            // 제목: td:nth-child(2) > div > span.accent > a
+            const titleEl = tr.querySelector('td:nth-child(2) > div > span.accent > a');
+            const title = titleEl?.getAttribute('title') || titleEl?.textContent?.trim() || '';
             
-            allLinks.forEach(link => {
-              const href = link.getAttribute('href');
-              const text = link.textContent?.trim() || '';
-              
-              // recruit 관련 링크만
-              if (href && href.includes('recruit') && text.length > 10) {
-                const parent = link.closest('tr, li, div.cl_top, div.cell_mid');
-                const companyEl = parent?.querySelector('a[href*="company"], td:nth-child(2) a');
-                
-                results.push({
-                  title: text.substring(0, 100),
-                  company: companyEl?.textContent?.trim() || '회사명없음',
-                  location: parent?.querySelector('td:nth-child(3), span')?.textContent?.trim() || '',
-                  experience: '경력무관',
-                  education: '학력무관',
-                  link: href.includes('http') ? href : `https://job.incruit.com${href}`,
-                  source: 'Incruit'
-                });
-              }
-            });
+            // 분야: td:nth-child(2) > div > p.details_txts.firstChild > em
+            const field = tr.querySelector('td:nth-child(2) > div > p.details_txts.firstChild > em')?.textContent?.trim() || '';
             
-            return results.filter((j, i, arr) => arr.findIndex(x => x.link === j.link) === i).slice(0, 30);
-          });
-          
-          console.log(`Incruit URL result: ${pageJobs.length}`);
-          if (pageJobs.length > 0) break;
-          
-        } catch (urlErr) {
-          console.error(`Incruit URL error:`, urlErr.message);
-        }
-      }
+            // 경력+학력: td:nth-child(2) > div > p:nth-child(4)>em
+            const careerAcademicText = tr.querySelector('td:nth-child(2) > div > p:nth-child(4) > em')?.textContent?.trim() || '';
+            const careerAcademic = careerAcademicText.split('|');
+            const career = careerAcademic[0]?.trim() || '경력무관';
+            const academic = careerAcademic[1]?.trim() || '학력무관';
+            
+            // 위치+근무조건: td:nth-child(3) > div > p > em
+            const areaWorkingText = tr.querySelector('td:nth-child(3) > div > p > em')?.textContent?.trim() || '';
+            const areaWorking = areaWorkingText.split('\n').filter(s => s.trim());
+            const area = (areaWorking[1] || '').replace(' 외', '').trim() || '지역정보없음';
+            
+            // 마감일: td.lasts > div.ddays > p:nth-last-child(1)
+            const deadline = tr.querySelector('td.lasts > div.ddays > p:nth-last-child(1)')?.textContent?.trim() || '';
+            
+            // 링크
+            const titleLink = companyEl?.getAttribute('href') || '';
+            const fullLink = titleLink.includes('http') ? titleLink : `http://job.incruit.com${titleLink}`;
+            
+            if (title && title.length > 3 && company) {
+              results.push({
+                title: title.substring(0, 100),
+                company: company.substring(0, 50),
+                location: area,
+                experience: career,
+                education: academic,
+                link: fullLink,
+                source: 'Incruit'
+              });
+            }
+          } catch (e) {
+            console.error('Row parsing error:', e);
+          }
+        });
+        
+        return results;
+      });
+      
+      console.log(`Incruit page ${page}: ${pageJobs.length} jobs`);
+      
       await p.close();
       jobs.push(...pageJobs);
       
@@ -328,10 +353,10 @@ async function scrapeIncruit(browser, query, maxPages) {
     }
   }
   
-  return jobs.slice(0, 60);
+  return jobs.filter((j, i, arr) => arr.findIndex(x => x.link === j.link) === i).slice(0, 60);
 }
 
-// 원티드
+// 원티드 (제목 필터링 개선)
 async function scrapeWanted(browser, query) {
   const p = await browser.newPage();
   await p.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
@@ -345,25 +370,75 @@ async function scrapeWanted(browser, query) {
     await p.waitForTimeout(1000);
   }
   
-  const jobs = await p.evaluate(() => {
+  const jobs = await p.evaluate((searchQuery) => {
     const results = [];
-    document.querySelectorAll('[class*="Card"], div[class*="job"], article').forEach(el => {
-      const titleEl = el.querySelector('a, h2, h3, strong');
-      if (titleEl && titleEl.textContent && titleEl.textContent.trim().length > 3) {
-        const linkEl = el.querySelector('a[href*="/wd/"]');
-        results.push({
-          title: titleEl.textContent.trim(),
-          company: el.querySelector('[class*="company"]')?.textContent.trim() || '회사명없음',
-          location: el.querySelector('[class*="location"]')?.textContent.trim() || '서울',
-          experience: '경력무관',
-          education: '학력무관',
-          link: linkEl ? `https://www.wanted.co.kr${linkEl.getAttribute('href')}` : '',
-          source: 'Wanted'
-        });
+    
+    // 채용공고 카드 찾기
+    const cards = document.querySelectorAll('[class*="Card"], [class*="JobCard"], div[data-job-id]');
+    
+    cards.forEach(card => {
+      try {
+        // 제목 찾기 - 여러 셀렉터 시도
+        const titleSelectors = [
+          'h2[class*="JobCard"]',
+          'h3[class*="JobCard"]',
+          '[class*="JobCard_title"]',
+          'div[class*="JobCard"] > a > strong',
+          'a[class*="JobCard"] strong'
+        ];
+        
+        let titleEl = null;
+        for (const selector of titleSelectors) {
+          titleEl = card.querySelector(selector);
+          if (titleEl) break;
+        }
+        
+        if (!titleEl) return;
+        
+        const fullTitle = titleEl.textContent?.trim() || '';
+        
+        // 제목 정제: 첫 줄만 추출 (개행 문자 기준)
+        const titleLines = fullTitle.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+        const cleanTitle = titleLines[0] || fullTitle;
+        
+        // 너무 긴 제목은 100자로 제한
+        const title = cleanTitle.length > 100 ? cleanTitle.substring(0, 100) + '...' : cleanTitle;
+        
+        // 검색어와 관련 없는 긴 글은 제외 (300자 이상이면 블로그 글일 가능성)
+        if (fullTitle.length > 300) return;
+        
+        // 회사명
+        const companyEl = card.querySelector('[class*="company"], [class*="Company"]');
+        const company = companyEl?.textContent?.trim() || '회사명없음';
+        
+        // 위치
+        const locationEl = card.querySelector('[class*="location"], [class*="Location"]');
+        const location = locationEl?.textContent?.trim() || '서울';
+        
+        // 링크
+        const linkEl = card.querySelector('a[href*="/wd/"]');
+        const link = linkEl ? `https://www.wanted.co.kr${linkEl.getAttribute('href')}` : '';
+        
+        // 유효성 검사
+        if (title && title.length >= 5 && title.length <= 150 && !title.includes('http')) {
+          results.push({
+            title,
+            company,
+            location,
+            experience: '경력무관',
+            education: '학력무관',
+            link,
+            source: 'Wanted'
+          });
+        }
+      } catch (e) {
+        console.error('Card parsing error:', e);
       }
     });
+    
+    // 중복 제거
     return results.filter((j, i, arr) => arr.findIndex(x => x.title === j.title) === i);
-  });
+  }, query);
   
   await p.close();
   return jobs.slice(0, 30);
