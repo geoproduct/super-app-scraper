@@ -257,7 +257,6 @@ async function scrapeJobKorea(browser, query, maxPages) {
   
   return jobs.filter((j, i, arr) => arr.findIndex(x => x.link === j.link) === i).slice(0, 100);
 }
-
 async function scrapeIncruit(browser, query, maxPages) {
   const jobs = [];
   
@@ -267,58 +266,119 @@ async function scrapeIncruit(browser, query, maxPages) {
       await p.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
       await p.setViewport({ width: 1920, height: 1080 });
       
-      const url = `http://job.incruit.com/entry/searchjob.asp?ct=12&ty=1&cd=1&kw=${encodeURIComponent(query)}&articlecount=60&page=${page}`;
+      // 여러 URL 패턴 시도
+      const urls = [
+        `http://job.incruit.com/entry/searchjob.asp?ct=12&ty=1&cd=1&kw=${encodeURIComponent(query)}&articlecount=60&page=${page}`,
+        `http://job.incruit.com/jobdb_list/searchjob.asp?ct=1&kw=${encodeURIComponent(query)}&page=${page}`,
+        `http://www.incruit.com/search/list.asp?col=job&kw=${encodeURIComponent(query)}&page=${page}`
+      ];
       
-      console.log(`Incruit URL: ${url}`);
-      await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await p.waitForTimeout(5000);
+      let pageJobs = [];
       
-      const pageJobs = await p.evaluate(() => {
-        const results = [];
-        const rows = document.querySelectorAll('#content > div:not(.entry-new2017) > div.n_job_list_table_a.list_full_default > table > tbody > tr');
-        
-        console.log(`Found ${rows.length} rows`);
-        
-        rows.forEach(tr => {
-          try {
-            const companyEl = tr.querySelector('th > div > div.check_list_r > span > a');
-            const company = companyEl?.getAttribute('title') || companyEl?.textContent?.trim() || '';
-            
-            const titleEl = tr.querySelector('td:nth-child(2) > div > span.accent > a');
-            const title = titleEl?.getAttribute('title') || titleEl?.textContent?.trim() || '';
-            
-            const careerAcademicText = tr.querySelector('td:nth-child(2) > div > p:nth-child(4) > em')?.textContent?.trim() || '';
-            const careerAcademic = careerAcademicText.split('|');
-            const career = careerAcademic[0]?.trim() || '경력무관';
-            const academic = careerAcademic[1]?.trim() || '학력무관';
-            
-            const areaWorkingText = tr.querySelector('td:nth-child(3) > div > p > em')?.textContent?.trim() || '';
-            const areaWorking = areaWorkingText.split('\n').filter(s => s.trim());
-            const area = (areaWorking[1] || '').replace(' 외', '').trim() || '지역정보없음';
-            
-            const titleLink = companyEl?.getAttribute('href') || '';
-            const fullLink = titleLink.includes('http') ? titleLink : `http://job.incruit.com${titleLink}`;
-            
-            if (title && title.length > 3 && company) {
-              results.push({
-                title: title.substring(0, 100),
-                company: company.substring(0, 50),
-                location: area,
-                experience: career,
-                education: academic,
-                link: fullLink,
-                source: 'Incruit'
-              });
-            }
-          } catch (e) {
-            console.error('Row parsing error:', e);
+      for (const url of urls) {
+        try {
+          console.log(`Incruit trying: ${url}`);
+          await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+          await p.waitForTimeout(5000);
+          
+          // 페이지 HTML 확인
+          const hasContent = await p.evaluate(() => {
+            const rows1 = document.querySelectorAll('#content > div:not(.entry-new2017) > div.n_job_list_table_a.list_full_default > table > tbody > tr');
+            const rows2 = document.querySelectorAll('table tr, .cl_top, .n_job_list_default');
+            console.log(`Selector 1: ${rows1.length} rows`);
+            console.log(`Selector 2: ${rows2.length} rows`);
+            return rows1.length > 0 || rows2.length > 0;
+          });
+          
+          if (!hasContent) {
+            console.log(`No content found with this URL`);
+            continue;
           }
-        });
-        
-        return results;
-      });
+          
+          pageJobs = await p.evaluate(() => {
+            const results = [];
+            
+            // 방법 1: 원래 셀렉터
+            let rows = document.querySelectorAll('#content > div:not(.entry-new2017) > div.n_job_list_table_a.list_full_default > table > tbody > tr');
+            
+            if (rows.length === 0) {
+              // 방법 2: 더 일반적인 셀렉터
+              rows = document.querySelectorAll('table.n_job_list_table_a tr, table tbody tr');
+            }
+            
+            console.log(`Processing ${rows.length} rows`);
+            
+            rows.forEach(tr => {
+              try {
+                // 모든 a 태그 찾기
+                const allLinks = tr.querySelectorAll('a');
+                
+                let title = '';
+                let company = '';
+                let link = '';
+                
+                // 링크에서 정보 추출
+                allLinks.forEach(a => {
+                  const href = a.getAttribute('href') || '';
+                  const text = a.textContent?.trim() || '';
+                  
+                  if (href.includes('recruit') && text.length > 5) {
+                    title = text;
+                    link = href.includes('http') ? href : `http://job.incruit.com${href}`;
+                  } else if (href.includes('company') && text.length > 2) {
+                    company = text;
+                  }
+                });
+                
+                // 대체 방법: td 기반
+                if (!title) {
+                  const td2 = tr.querySelector('td:nth-child(2)');
+                  if (td2) {
+                    const titleA = td2.querySelector('a');
+                    title = titleA?.textContent?.trim() || '';
+                    link = titleA?.getAttribute('href') || '';
+                    if (link && !link.includes('http')) link = `http://job.incruit.com${link}`;
+                  }
+                }
+                
+                if (!company) {
+                  const th = tr.querySelector('th');
+                  const companyA = th?.querySelector('a');
+                  company = companyA?.textContent?.trim() || '';
+                }
+                
+                // 지역 정보
+                const td3 = tr.querySelector('td:nth-child(3)');
+                const location = td3?.textContent?.trim().split('\n')[0] || '';
+                
+                if (title && title.length > 3 && company) {
+                  results.push({
+                    title: title.substring(0, 100),
+                    company: company.substring(0, 50),
+                    location: location || '지역정보없음',
+                    experience: '경력무관',
+                    education: '학력무관',
+                    link: link || '',
+                    source: 'Incruit'
+                  });
+                }
+              } catch (e) {
+                console.error('Row error:', e);
+              }
+            });
+            
+            return results;
+          });
+          
+          console.log(`Incruit URL result: ${pageJobs.length} jobs`);
+          
+          if (pageJobs.length > 0) break;
+          
+        } catch (urlErr) {
+          console.error(`Incruit URL error:`, urlErr.message);
+        }
+      }
       
-      console.log(`Incruit page ${page}: ${pageJobs.length} jobs`);
       await p.close();
       jobs.push(...pageJobs);
       
@@ -423,28 +483,56 @@ async function scrapeCompanyCareers(browser, query) {
       const p = await browser.newPage();
       await p.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
       await p.goto(company.url, { waitUntil: 'networkidle2', timeout: 30000 });
-      await p.waitForTimeout(3000);
+      await p.waitForTimeout(5000);
+      
+      // 스크롤 (동적 콘텐츠 로딩)
+      for (let i = 0; i < 3; i++) {
+        await p.evaluate(() => window.scrollBy(0, 1000));
+        await p.waitForTimeout(1000);
+      }
       
       const companyJobs = await p.evaluate((companyName, queryText) => {
         const results = [];
-        document.querySelectorAll('a, li, div[class*="job"], article').forEach(el => {
-          const titleEl = el.querySelector('h3, h4, [class*="title"], strong, a');
-          const title = titleEl?.textContent?.trim() || el.textContent?.trim() || '';
+        const seenTitles = new Set();
+        
+        // 채용 공고 찾기
+        document.querySelectorAll('a, li, div, article').forEach(el => {
+          // 제목 추출
+          const titleEl = el.querySelector('h3, h4, h5, [class*="title"], strong') || el;
+          let title = titleEl.textContent?.trim() || '';
           
-          if (title && title.toLowerCase().includes(queryText.toLowerCase()) && title.length > 5 && title.length < 200) {
-            const linkEl = el.querySelector('a') || (el.tagName === 'A' ? el : null);
+          // 너무 긴 텍스트 제외 (블로그 글 등)
+          if (title.length > 200 || title.length < 10) return;
+          
+          // 검색어 포함 여부
+          const queryLower = queryText.toLowerCase();
+          const titleLower = title.toLowerCase();
+          
+          if (!titleLower.includes(queryLower)) return;
+          
+          // 중복 제거
+          if (seenTitles.has(title)) return;
+          seenTitles.add(title);
+          
+          // 링크 찾기
+          const linkEl = el.tagName === 'A' ? el : el.closest('a') || el.querySelector('a');
+          const link = linkEl?.href || '';
+          
+          // 유효성 검사
+          if (link && !link.includes('javascript') && !link.includes('#')) {
             results.push({
               title: title.substring(0, 100),
               company: companyName,
               location: '서울',
               experience: '경력무관',
               education: '학력무관',
-              link: linkEl?.href || '',
+              link: link,
               source: companyName
             });
           }
         });
-        return results.slice(0, 5);
+        
+        return results.slice(0, 10);
       }, company.source, query);
       
       await p.close();
@@ -456,7 +544,7 @@ async function scrapeCompanyCareers(browser, query) {
     }
   }
   
-  return jobs;
+  return jobs.filter((j, i, arr) => arr.findIndex(x => x.link === j.link) === i);
 }
 
 const PORT = process.env.PORT || 3000;
